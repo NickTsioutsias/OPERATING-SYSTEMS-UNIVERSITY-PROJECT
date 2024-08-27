@@ -70,8 +70,10 @@ void start_process(int index) {
 
 void handle_child_exit(int sig) {
     int status;
-    pid_t pid = waitpid(-1, &status, WNOHANG);
-    if (pid > 0) {
+    pid_t pid;
+
+    // Use a loop to handle multiple child exits in case more than one process has terminated
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         for (int i = 0; i < process_count; i++) {
             if (processes[i].pid == pid) {
                 processes[i].state = EXITED;
@@ -83,7 +85,9 @@ void handle_child_exit(int sig) {
                     (processes[i].end_time.tv_usec - processes[i].start_time.tv_usec) / 1000000.0;
 
                 // Print process finished message and execution time
-                printf("Process %s execution time: %.6f seconds\n", processes[i].name, execution_time);
+                printf("Process %s (PID %d) exited. Execution time: %.6f seconds\n",
+                       processes[i].name, processes[i].pid, execution_time);
+
                 break;
             }
         }
@@ -100,55 +104,86 @@ void run_fcfs() {
 }
 
 void switch_process(int from, int to) {
+    // Stop the current process if it's not -1
     if (from != -1) {
-        kill(processes[from].pid, SIGSTOP);
-        processes[from].state = STOPPED;
+        if (processes[from].state == RUNNING) {
+            printf("Stopping process %d (%s)\n", from, processes[from].name);
+            kill(processes[from].pid, SIGSTOP);
+            processes[from].state = STOPPED;
+        }
     }
+    
+    // Start or resume the next process if it's not -1
     if (to != -1) {
         if (processes[to].state == NEW) {
+            printf("Starting new process %d (%s)\n", to, processes[to].name);
             start_process(to);
-        } else {
+        } else if (processes[to].state == STOPPED) {
+            printf("Resuming stopped process %d (%s)\n", to, processes[to].name);
             kill(processes[to].pid, SIGCONT);
             processes[to].state = RUNNING;
         }
+        
         current_process = to;
+    } else {
+        current_process = -1;
     }
 }
+
 
 void run_rr() {
     int time_slice = 0;
     int next_process = 0;
 
     while (1) {
-        if (current_process == -1 || processes[current_process].state == EXITED) {
-            // Find next runnable process
-            do {
-                next_process = (next_process + 1) % process_count;
-                if (next_process == 0) {
-                    // Checked all processes
-                    int all_exited = 1;
-                    for (int i = 0; i < process_count; i++) {
-                        if (processes[i].state != EXITED) {
-                            all_exited = 0;
-                            break;
-                        }
-                    }
-                    if (all_exited) return;
-                }
-            } while (processes[next_process].state == EXITED);
+        // Check if all processes have exited
+        int all_exited = 1;
+        for (int i = 0; i < process_count; i++) {
+            if (processes[i].state != EXITED) {
+                all_exited = 0;
+                break;
+            }
+        }
 
+        // Exit if all processes have exited
+        if (all_exited) {
+            printf("All processes have exited. Ending RR.\n");
+            break;
+        }
+
+        // If the current process is invalid or has exited, find the next process
+        if (current_process == -1 || processes[current_process].state == EXITED) {
+            // Start from the first process if current_process is -1
+            if (current_process == -1) {
+                next_process = 0;
+            } else {
+                // Start from the next process if current_process is not -1
+                next_process = (current_process + 1) % process_count;
+            }
+            
+            // Skip over exited processes
+            while (processes[next_process].state == EXITED) {
+                next_process = (next_process + 1) % process_count;
+            }
+
+            // Switch to the next valid process
+            printf("Switching from process %d to %d\n", current_process, next_process);
             switch_process(current_process, next_process);
             time_slice = 0;
         }
 
-        usleep(1000); // Sleep for 1ms
+        // Sleep for 1ms to simulate time passing
+        usleep(1000); 
         time_slice++;
 
+        // Check if quantum expired and switch process
         if (time_slice >= quantum) {
-            next_process = (current_process + 1) % process_count;
-            while (processes[next_process].state == EXITED) {
-                next_process = (next_process + 1) % process_count;
-            }
+            // Move to the next process
+            do {
+                next_process = (current_process + 1) % process_count;
+            } while (processes[next_process].state == EXITED);
+
+            printf("Quantum expired. Switching from process %d to %d\n", current_process, next_process);
             switch_process(current_process, next_process);
             time_slice = 0;
         }

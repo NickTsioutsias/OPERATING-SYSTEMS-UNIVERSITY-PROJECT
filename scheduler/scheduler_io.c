@@ -77,8 +77,14 @@ void handle_child_exit(int sig) {
             if (processes[i].pid == pid) {
                 processes[i].state = EXITED;
                 gettimeofday(&processes[i].end_time, NULL);
-                printf("Process %s (PID %d) finished\n", processes[i].name, pid);
-                break;
+
+                //Get execution time
+                double execution_time = 
+                    (processes[i].end_time.tv_sec - processes[i].start_time.tv_sec) +
+                    (processes[i].end_time.tv_usec - processes[i].start_time.tv_usec) / 1000000.0;
+                    printf("Process %s (PID %d) exited. Execution time: %.6f seconds\n",
+                           processes[i].name, processes[i].pid, execution_time);
+                    break;
             }
         }
     }
@@ -214,14 +220,6 @@ int main(int argc, char *argv[]) {
         run_fcfs();
     } else if (strcmp(policy, "RR") == 0) {
         run_rr();
-    }
-
-    // Print execution times
-    for (int i = 0; i < process_count; i++) {
-        double execution_time = 
-            (processes[i].end_time.tv_sec - processes[i].start_time.tv_sec) +
-            (processes[i].end_time.tv_usec - processes[i].start_time.tv_usec) / 1000000.0;
-        printf("Process %s execution time: %.2f seconds\n", processes[i].name, execution_time);
     }
 
     return 0;
