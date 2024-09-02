@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -5,8 +6,8 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <time.h>
-#include <errno.h>
 
 double get_wtime(void) {
     struct timeval t;
@@ -18,113 +19,81 @@ inline double f(double x) {
     return sin(cos(x));
 }
 
-// Shared memory structure
-typedef struct {
-    double *partial_sums;
-    int num_processes;
-} SharedData;
-
-// WolframAlpha: integral sin(cos(x)) from 0 to 1 = 0.738643
-// 0.73864299803689018
-// 0.7386429980368901838000902905852160417480209422447648518714116299
-
 int main(int argc, char *argv[]) {
-  double a = 0.0;
-  double b = 1.0;
-  unsigned long n = 24e7;  // or e8
-  const double h = (b-a)/n;
-  const double ref = 0.73864299803689018;
-  const long tseed = 10;
-  double res = 0;
-  double t0, t1;
+    double a = 0.0;
+    double b = 1.0;
+    unsigned long n = 24e7;
+    const double h = (b-a)/n;
+    const double ref = 0.73864299803689018;
+    int num_processes = 1;
+    double res = 0;
+    double t0, t1;
 
-
-    // Initialize number of processes to number of available processors
+    // Get the number of available processors
     long num_processors = sysconf(_SC_NPROCESSORS_ONLN);
-    int num_processes = (num_processors > 0) ? (int)num_processors : 1;
-
-  //check for num of args
-   if (argc > 3) {
-        fprintf(stderr, "Usage: %s [num_processes] [num_samples]\n", argv[0]);
+    if (num_processors < 1) {
+        fprintf(stderr, "Error: Could not determine the number of processors.\n");
         exit(1);
     }
 
-    if (argc >= 2) {
-        char *endptr;
-        errno = 0;
-        long temp = strtol(argv[1], &endptr, 10);
-        if (errno != 0 || *endptr != '\0' || temp <= 0) {
-            fprintf(stderr, "Invalid number of processes\n");
-            exit(1);
-        }
-        num_processes = (int)temp;
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr, "Usage: %s <num_processes> [num_iterations]\n", argv[0]);
+        exit(1);
+    }
+
+    num_processes = atoi(argv[1]);
+    if (num_processes < 1 || num_processes > num_processors) {
+        fprintf(stderr, "Number of processes must be between 1 and %ld\n", num_processors);
+        exit(1);
     }
 
     if (argc == 3) {
-        char *endptr;
-        errno = 0;
-        n = strtoul(argv[2], &endptr, 10);
-        if (errno != 0 || *endptr != '\0' || n == 0) {
-            fprintf(stderr, "Invalid number of samples\n");
-            exit(1);
-        }
-    }
-  
-  // Create shared memory for SharedData structure
-    SharedData *shared_data = mmap(NULL, sizeof(SharedData), 
-                                   PROT_READ | PROT_WRITE, 
-                                   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (shared_data == MAP_FAILED) {
-        perror("mmap SharedData");
-        exit(1);
-    }
-  
-  // Allocate memory for partial_sums
-    shared_data->partial_sums = mmap(NULL, num_processes * sizeof(double), 
-                                     PROT_READ | PROT_WRITE, 
-                                     MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (shared_data->partial_sums == MAP_FAILED) {
-        perror("mmap partial_sums");
-        munmap(shared_data, sizeof(SharedData));
-        exit(1);
+        n = atol(argv[2]);
     }
 
-    shared_data->num_processes = num_processes;
+    // Create shared memory
+    double *shared_results = mmap(NULL, num_processors * sizeof(double), 
+                                  PROT_READ | PROT_WRITE, 
+                                  MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (shared_results == MAP_FAILED) {
+        perror("mmap");
+        exit(1);
+    }
 
     t0 = get_wtime();
 
-      // Spawn child processes
+    // Fork processes
     for (int i = 0; i < num_processes; i++) {
         pid_t pid = fork();
-        if (pid == 0) {  // Child process
-            unsigned long samples_per_process = n / num_processes;
-            unsigned long start = i * samples_per_process;
-            unsigned long end = (i == num_processes - 1) ? n : (i + 1) * samples_per_process;
-            
-            // Initialize random seed for each child process
-            srand(time(NULL) ^ (getpid()<<16));
-            
-            double partial_sum = 0;
-            for (unsigned long j = start; j < end; j++) {
-                double xi = (double)rand() / RAND_MAX;
-                partial_sum += f(xi);
-            }
-            shared_data->partial_sums[i] = partial_sum;
-            exit(0);
-        } else if (pid < 0) {
+        if (pid < 0) {
             perror("fork");
             exit(1);
+        } else if (pid == 0) {  // Child process
+            unsigned long start = i * (n / num_processes);
+            unsigned long end = (i == num_processes - 1) ? n : (i + 1) * (n / num_processes);
+            double partial_sum = 0.0;
+
+            // Initialize random number generator with a different seed for each process
+            srand48(time(NULL) ^ (getpid() << 16));
+
+            for (unsigned long j = start; j < end; j++) {
+                double xi = drand48();
+                partial_sum += f(xi);
+            }
+
+            shared_results[i] = partial_sum;
+            exit(0);
         }
     }
 
-    // Wait for all child processes to complete
+    // Wait for all child processes to finish
     for (int i = 0; i < num_processes; i++) {
         wait(NULL);
     }
 
-    // Sum up partial results
-    for (int i = 0; i < shared_data->num_processes; i++) {
-        res += shared_data->partial_sums[i];
+    // Sum up the results
+    for (int i = 0; i < num_processes; i++) {
+        res += shared_results[i];
     }
     res *= h;
 
@@ -134,12 +103,7 @@ int main(int argc, char *argv[]) {
            res, fabs(res-ref), fabs(res-ref)/ref, t1-t0);
 
     // Clean up shared memory
-    if (munmap(shared_data->partial_sums, num_processes * sizeof(double)) == -1) {
-        perror("munmap partial_sums");
-    }
-    if (munmap(shared_data, sizeof(SharedData)) == -1) {
-        perror("munmap shared_data");
-    }
+    munmap(shared_results, num_processors * sizeof(double));
 
-  return 0;
+    return 0;
 }
