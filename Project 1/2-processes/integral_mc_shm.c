@@ -98,7 +98,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < num_processes; i++) {
         res += shared_results[i];
     }
-    //sum up partial sums
+    //   
     res *= h;
     //get time after execution
     t1 = get_wtime();
