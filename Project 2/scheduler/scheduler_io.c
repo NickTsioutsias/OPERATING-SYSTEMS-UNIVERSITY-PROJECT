@@ -71,20 +71,25 @@ void start_process(int index) {
 
 void handle_child_exit(int sig) {
     int status;
-    pid_t pid = waitpid(-1, &status, WNOHANG);
-    if (pid > 0) {
+    pid_t pid;
+
+    // Use a loop to handle multiple child exits in case more than one process has terminated
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         for (int i = 0; i < process_count; i++) {
             if (processes[i].pid == pid) {
                 processes[i].state = EXITED;
                 gettimeofday(&processes[i].end_time, NULL);
 
-                //Get execution time
+                // Calculate execution time
                 double execution_time = 
                     (processes[i].end_time.tv_sec - processes[i].start_time.tv_sec) +
                     (processes[i].end_time.tv_usec - processes[i].start_time.tv_usec) / 1000000.0;
-                    printf("Process %s (PID %d) exited. Execution time: %.6f seconds\n",
-                           processes[i].name, processes[i].pid, execution_time);
-                    break;
+
+                // Print process finished message and execution time
+                printf("Process %s (PID %d) exited. Execution time: %.6f seconds\n",
+                       processes[i].name, processes[i].pid, execution_time);
+
+                break;
             }
         }
     }
